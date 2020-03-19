@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"encoding/json"
 	"fmt"
 	"goyun/meta"
 	"goyun/util"
@@ -51,13 +52,100 @@ func UploadHandler(w http.ResponseWriter, r *http.Request) {
 
 		newFile.Seek(0, 0)
 		fileMeta.FileSha1 = util.FileSha1(newFile)
-		meta.UpdateFileMeta(fileMeta)
-
-		http.Redirect(w, r, "/file/upload/suc", http.StatusFound)
+		meta.UpdateFileMeta(fileMeta)       //更新map
+		_ = meta.UpdateFileMetaDB(fileMeta) //更新数据库
+		io.WriteString(w, fileMeta.FileSha1)
+		// http.Redirect(w, r, "/file/upload/suc", http.StatusFound)
 	}
 }
 
 //UploadSucHandler 上传成功
 func UploadSucHandler(w http.ResponseWriter, r *http.Request) {
 	io.WriteString(w, "Upload finished!")
+}
+
+//GetFileMetaHandler 获取文件元信息
+func GetFileMetaHandler(w http.ResponseWriter, r *http.Request) {
+	r.ParseForm()
+	filehash := r.Form["filehash"][0]
+	// fMeta := meta.GetFileMeta(filehash)//从map查询
+	fMeta, err := meta.GetFileMetaDB(filehash) //从MySQL查询
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	data, err := json.Marshal(fMeta)
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+	w.Write(data)
+}
+
+//DownloadHandler 下载文件
+func DownloadHandler(w http.ResponseWriter, r *http.Request) {
+	r.ParseForm()
+	fsha1 := r.Form.Get("filehash")
+	fm := meta.GetFileMeta(fsha1)
+
+	f, err := os.Open(fm.Location)
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+	defer f.Close()
+
+	data, err := ioutil.ReadAll(f)
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/octect-stream")
+	w.Header().Set("Content-disposition", "attachment;filename=\""+fm.FileName+"\"")
+	w.Write(data)
+
+}
+
+//FileMetaUpdateHandler 更新文件名
+func FileMetaUpdateHandler(w http.ResponseWriter, r *http.Request) {
+	r.ParseForm()
+
+	opType := r.Form.Get("op")
+	filesha1 := r.Form.Get("filehash")
+	newFilename := r.Form.Get("filename")
+
+	if opType != "0" {
+		w.WriteHeader(http.StatusForbidden)
+		return
+	}
+	if r.Method != "POST" {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+
+	curFileMeta := meta.GetFileMeta(filesha1) //获取文件
+	curFileMeta.FileName = newFilename        //修改文件名,这里只修改了map里的文件名
+	meta.UpdateFileMeta(curFileMeta)
+
+	data, err := json.Marshal(curFileMeta)
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusOK)
+	w.Write(data)
+}
+
+//FileDeleteHandler 删除文件
+func FileDeleteHandler(w http.ResponseWriter, r *http.Request) {
+	r.ParseForm()
+	fileSha1 := r.Form.Get("filehash")
+	//从磁盘删除
+	fMeta := meta.GetFileMeta(fileSha1)
+	os.Remove(fMeta.Location)
+
+	meta.RemoveFileMeta(fileSha1)
+	w.WriteHeader(http.StatusOK)
 }
